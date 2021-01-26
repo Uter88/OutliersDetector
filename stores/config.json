@@ -1,0 +1,17 @@
+{
+    "Datasets": [
+        {
+            "siteId": "brax",
+            "TimeAgo": "30d",
+            "TImeStep": "1d",
+            "OutliersDetectionMethod": ["3-sigmas"],
+            "MetricesList": ["Revenue"],
+            "MinVisitorsPerTimeStep": 30,
+            "OutliersDetection": {
+                "OutliersMultipler": 2,
+                "StrongOutliersMultipler": 3
+            },
+            "Metrics": []
+        }
+    ]
+}
