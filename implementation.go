@@ -11,7 +11,7 @@ import (
 
 // GetMeanStDev get mean and standart deviation values
 func (dsv DataSetValues) GetMeanStDev() (float64, float64) {
-	vals := make([]float64, len(dsv))
+	vals := make([]float64, dsv.Len())
 
 	for i := range dsv {
 		vals[i] = dsv[i].Value
@@ -19,31 +19,16 @@ func (dsv DataSetValues) GetMeanStDev() (float64, float64) {
 	return MeanStDev(vals...)
 }
 
-// GetDateRanges generate date ranges
-func (ds DataSet) GetDateRanges() (start, end time.Time, err error) {
-	dur, err := ParseDuration(ds.TimeAgo)
-
-	if err != nil {
-		return
-	}
-	end = time.Now().UTC()
-	start = end.Add(-dur)
-	return start, end, nil
-}
-
-// GenerateData make DataSet values
+// GenerateData generate DataSet values
 func (ds *DataSet) GenerateData() {
-	start, end, err := ds.GetDateRanges()
+	end := time.Now()
+	start := end.Add(-time.Hour * 24 * 35)
 
-	if err != nil {
-		log.Printf("Error generate data: %s\n", err.Error())
-		return
-	}
 	for _, metric := range ds.MetricesList {
 		mv := MetricValues{Metric: metric}
 
 		for i := start.Unix(); i < end.Unix(); i += 60 * rand.Int63n(30) {
-			dt := time.Unix(i, 0)
+			dt := time.Unix(i, 0).UTC()
 			val := GenerateValue(dt)
 			mv.Values = append(mv.Values, DataSetValue{dt, val})
 		}
@@ -51,29 +36,65 @@ func (ds *DataSet) GenerateData() {
 	}
 }
 
-// FilterByMinValue filter dataset values by minimal value
-func (dsv DataSetValues) FilterByMinValue(min float64) (vals DataSetValues) {
+// BreakIntoPieces break DataSetValues into pices by timeStep duration
+func (dsv DataSetValues) BreakIntoPieces(timeStep time.Duration) (parts []DataSetValues) {
+	var total = dsv.Len()
+
+	var i, j int
+
+	for i = 0; i < total; i++ {
+		j = i
+		next := dsv[i].Date.Add(timeStep).Round(timeStep)
+
+		for j < total && dsv[j].Date.Before(next) {
+			j++
+		}
+		parts = append(parts, dsv[i:j])
+		i = j - 1
+	}
+	return
+}
+
+// Len return DataSetValues length
+func (dsv DataSetValues) Len() int {
+	return len(dsv)
+}
+
+// FilterByDatesAndMinValue filter dataset by start, end dates and minimal detect value
+func (dsv DataSetValues) FilterByDatesAndMinValue(startDate, endDate time.Time, minValue float64) (values DataSetValues) {
 	for _, v := range dsv {
-		if v.Value >= min {
-			vals = append(vals, v)
+		if v.Value >= minValue && v.Date.Unix() >= startDate.Unix() && v.Date.Unix() <= endDate.Unix() {
+			values = append(values, v)
 		}
 	}
 	return
 }
 
-// GetMinValue get outliers detection minimal value
-func (ds DataSet) GetMinValue() (v float64) {
-	dur, err := ParseDuration(ds.TimeAgo)
+// GetTimeAgoAndTimeStepDurations get TimeAgo and TimeStep durations
+func (ds DataSet) GetTimeAgoAndTimeStepDurations() (timeAgo, timeStep time.Duration, err error) {
+	timeAgo, err = ParseDuration(ds.TimeAgo)
 
-	if err != nil {
-		return float64(ds.MinVisitorsPerTimeStep)
+	if err == nil {
+		timeStep, err = ParseDuration(ds.TimeStep)
 	}
-	step, err := ParseDuration(ds.TimeStep)
+	return
+}
 
-	if err != nil {
-		return float64(ds.MinVisitorsPerTimeStep)
+// MakeOutlierOutput returns OutlierDetectOutput
+func (ds DataSet) MakeOutlierOutput(startDate, endDate time.Time) *OutlierDetectOutput {
+	return &OutlierDetectOutput{
+		SiteID:                  ds.SiteID,
+		TimeAgo:                 ds.TimeAgo,
+		TimeStep:                ds.TimeStep,
+		OutliersDetectionMethod: ThreeSigmas,
+		DateStart:               startDate.Format(DateTimeFormat),
+		DateEnd:                 endDate.Format(DateTimeFormat),
+		Result: OutliersDetectResult{
+			Warnings: make([]OutlierDetectResultRecord, 0),
+			Alarms:   make([]OutlierDetectResultRecord, 0),
+		},
 	}
-	return float64(dur/step) * float64(ds.MinVisitorsPerTimeStep)
+
 }
 
 // DetectOutliers detect DataSet values outliers
@@ -147,45 +168,27 @@ func (ol OutliersResultLog) Save() error {
 }
 
 // Equal check equality of outliers detect result and log
-func (or OutlierDetectResultRecord) Equal(o OutliersResultLog) bool {
-	if or.Metric != o.Metric {
+func (odr OutlierDetectResultRecord) Equal(orl OutliersResultLog) bool {
+	if odr.Metric != orl.Metric {
 		return false
 	}
-	if or.Attribute != o.Attribute {
+	if odr.Attribute != orl.Attribute {
 		return false
 	}
-	start1, end1, err1 := or.ParseDates()
-	start2, end2, err2 := o.ParseDates()
+	dates, err := ParseDates(
+		odr.OutlierPeriodStart, odr.OutlierPeriodEnd,
+		orl.OutlierPeriodStart, orl.OutlierPeriodEnd,
+	)
 
-	if err1 != nil || err2 != nil {
+	if err != nil {
 		return false
 	}
+	start1, end1, start2, end2 := dates[0], dates[1], dates[2], dates[3]
+
 	if start1.Day() == start2.Day() && end1.Day() == end2.Day() {
 		if start1.Hour() == start2.Hour() && end1.Hour() == end2.Hour() {
 			return true
 		}
 	}
 	return false
-}
-
-// ParseDates parse DateStart and DateEnd from string
-func (ol OutliersResultLog) ParseDates() (start, end time.Time, err error) {
-	start, err = time.Parse(DateTimeFormat, ol.OutlierPeriodStart)
-
-	if err != nil {
-		return
-	}
-	end, err = time.Parse(DateTimeFormat, ol.OutlierPeriodEnd)
-	return
-}
-
-// ParseDates parse DateStart and DateEnd from string
-func (or OutlierDetectResultRecord) ParseDates() (start, end time.Time, err error) {
-	start, err = time.Parse(DateTimeFormat, or.OutlierPeriodStart)
-
-	if err != nil {
-		return
-	}
-	end, err = time.Parse(DateTimeFormat, or.OutlierPeriodEnd)
-	return
 }

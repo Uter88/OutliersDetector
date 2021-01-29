@@ -92,7 +92,7 @@ func MeanStDev(args ...float64) (mean float64, stdDev float64) {
 }
 
 // GenerateValue generates random values ​​depending on the time
-// and generates outliers on the 11th at 12 and 18 hours
+// and generates outliers on the 11th (warning) and 12th (alarm) from 13:00 to 18:00
 func GenerateValue(dt time.Time) float64 {
 	hour := dt.Hour()
 	var min, max float64 = 750, 975
@@ -101,19 +101,29 @@ func GenerateValue(dt time.Time) float64 {
 	case 0, 1, 2, 3, 4, 5, 6, 22, 23:
 		min, max = 750, 900
 	case 7, 8, 9, 10, 11, 12, 19, 20, 21:
-		min, max = 900, 950
+		min, max = 900, 1000
 	case 13, 14, 15, 16, 17, 18:
-		min, max = 950, 975
-	}
+		min, max = 1000, 1100
 
-	// Generate outliers
-	if dt.Day() == 11 {
-		switch hour {
-		case 12:
-			min, max = 2000, 2000
-		case 18:
-			min, max = 2450, 2450
+		if dt.Day() == 11 {
+			min, max = 1100, 1200
+		} else if dt.Day() == 12 {
+			min, max = 1250, 1300
 		}
 	}
 	return (rand.Float64()*(max-min) + min)
+}
+
+// ParseDates parse dates from string by DateTimeFormat template
+func ParseDates(stringDates ...string) ([]time.Time, error) {
+	dates := make([]time.Time, len(stringDates))
+
+	for i := range stringDates {
+		if date, err := time.Parse(DateTimeFormat, stringDates[i]); err == nil {
+			dates[i] = date
+		} else {
+			return dates, err
+		}
+	}
+	return dates, nil
 }

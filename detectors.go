@@ -7,81 +7,72 @@ import (
 
 // ThreeSigmasOutlierDetector outlier detection by 3-sigmas rule
 func ThreeSigmasOutlierDetector(ds DataSet, mv MetricValues) (*OutlierDetectOutput, error) {
-	step, err := ParseDuration(ds.TimeStep)
+	checkStartTime := time.Now().UTC()
+
+	if len(mv.Values) == 0 {
+		return nil, errors.New("Empty values")
+	}
+	timeDuration, timeStep, err := ds.GetTimeAgoAndTimeStepDurations()
 
 	if err != nil {
 		return nil, err
 	}
+	endDate := mv.Values[mv.Values.Len()-1].Date.Truncate(timeStep)
+	startDate := endDate.Add(-timeDuration).Round(timeStep)
 
-	vals := mv.Values.FilterByMinValue(ds.GetMinValue())
-	total := len(vals)
+	minDetectionValue := float64(timeStep / timeDuration * time.Duration(ds.MinVisitorsPerTimeStep))
+	values := mv.Values.FilterByDatesAndMinValue(startDate, endDate, minDetectionValue)
 
-	if total == 0 {
-		return nil, errors.New("No available values")
+	if values.Len() == 0 {
+		return nil, errors.New("No available values for detecting")
 	}
+	output := ds.MakeOutlierOutput(startDate, endDate)
 
-	var x, y, n, i, j int
-	start := vals[0].Date
-	end := vals[total-1].Date
+	defer func() {
+		output.CheckTimeStart = checkStartTime.UTC().Format(DateTimeFormat)
+		output.CheckTimeEnd = time.Now().UTC().Format(DateTimeFormat)
+	}()
 
-	out := &OutlierDetectOutput{
-		SiteID:                  ds.SiteID,
-		TimeAgo:                 ds.TimeAgo,
-		TimeStep:                ds.TimeStep,
-		OutliersDetectionMethod: ThreeSigmas,
-		DateStart:               start.Format(DateTimeFormat),
-		DateEnd:                 end.Format(DateTimeFormat),
-		Result: OutliersDetectResult{
-			Warnings: make([]OutlierDetectResultRecord, 0),
-			Alarms:   make([]OutlierDetectResultRecord, 0),
-		},
+	parts := values.BreakIntoPieces(timeStep)
+	means := make([]float64, len(parts))
+	stDevs := make([]float64, len(parts))
+
+	for i, part := range parts {
+		means[i], stDevs[i] = part.GetMeanStDev()
 	}
+	commonMean, _ := MeanStDev(means...)
+	commonStDev, _ := MeanStDev(stDevs...)
 
-	defer func(starTime time.Time) {
-		out.CheckTimeStart = starTime.UTC().Format(DateTimeFormat)
-		out.CheckTimeEnd = time.Now().UTC().Format(DateTimeFormat)
-	}(time.Now())
+	warnUpperLimit := commonMean + commonStDev*ds.OutliersDetection.OutliersMultipler
+	alarmUpperLimit := commonMean + commonStDev*ds.OutliersDetection.StrongOutliersMultipler
 
-	for ; start.Before(end); start = start.Add(step) {
-		x = y
-
-		for y < total && vals[y].Date.Day() == start.Day() {
-			y++
+	for indx, part := range parts {
+		if means[indx] < commonMean {
+			continue
 		}
-
-		mean, std := vals[x:y].GetMeanStDev()
-
-		warnUpperLimit := mean + std*ds.OutliersDetection.OutliersMultipler
-		alarmUpperLimit := mean + std*ds.OutliersDetection.StrongOutliersMultipler
-
-		for i = x; i < y; i++ {
-
-			if vals[i].Value > warnUpperLimit && x > 0 && y < total {
-				n = i
-				j = i
-
-				for n >= x && vals[n].Value > mean {
-					n--
-				}
-				for j <= y && vals[j].Value > mean {
-					j++
-				}
-
-				r := OutlierDetectResultRecord{
-					Metric:             mv.Metric,
-					Attribute:          mv.Attribute,
-					OutlierPeriodStart: vals[n].Date.Format(DateTimeFormat),
-					OutlierPeriodEnd:   vals[j].Date.Format(DateTimeFormat),
-				}
-
-				if vals[i].Value > alarmUpperLimit {
-					out.Result.Alarms = append(out.Result.Alarms, r)
-				} else {
-					out.Result.Warnings = append(out.Result.Warnings, r)
-				}
-				i = j
+		for start := 1; start < part.Len(); start++ {
+			if part[start].Value <= warnUpperLimit {
+				continue
 			}
+			stop := start
+
+			for part[stop].Value > means[indx]+stDevs[indx] && stop < part.Len() {
+				stop++
+			}
+			result := OutlierDetectResultRecord{
+				OutlierPeriodStart: part[start-1].Date.Format(DateTimeFormat),
+				OutlierPeriodEnd:   part[stop].Date.Format(DateTimeFormat),
+				Metric:             mv.Metric,
+				Attribute:          mv.Attribute,
+			}
+
+			if mean, _ := part[start:stop].GetMeanStDev(); mean > alarmUpperLimit {
+				output.Result.Alarms = append(output.Result.Alarms, result)
+			} else {
+				output.Result.Warnings = append(output.Result.Warnings, result)
+			}
+			start = stop
 		}
 	}
-	return out, nil
+	return output, nil
 }

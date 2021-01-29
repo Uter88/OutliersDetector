@@ -45,17 +45,17 @@ func GetDataSets() ([]DataSet, error) {
 }
 
 // ParseDuration parse time duration from string, like 1d, 24h
-func ParseDuration(step string) (dur time.Duration, err error) {
-	l := len(step)
+func ParseDuration(stringDuration string) (duration time.Duration, err error) {
+	l := len(stringDuration)
 
 	if l > 1 {
-		val, err := strconv.Atoi(step[:l-1])
+		val, err := strconv.Atoi(stringDuration[:l-1])
 
 		if err != nil {
-			return dur, fmt.Errorf("Error parse duration value: %s", err)
+			return duration, fmt.Errorf("Error parse duration value: %s", err)
 		}
 
-		switch step[l-1] {
+		switch stringDuration[l-1] {
 		case 'm':
 			return time.Duration(val) * time.Minute, nil
 		case 'h':
@@ -63,10 +63,10 @@ func ParseDuration(step string) (dur time.Duration, err error) {
 		case 'd':
 			return time.Duration(val) * 24 * time.Hour, nil
 		default:
-			return dur, errors.New("Invalid duration, expected: m, h, d, w")
+			return duration, errors.New("Invalid duration, expected: m, h, d, w")
 		}
 	}
-	return dur, errors.New("Corrupted duration param")
+	return duration, errors.New("Corrupted duration param")
 }
 
 // OutliersReporter listens to the outliers channel, checks for uniqueness, in case of a new outliers - send a report
